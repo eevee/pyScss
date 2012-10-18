@@ -55,7 +55,8 @@ import time
 
 from scss.config import DEBUG, LOAD_PATHS, STATIC_ROOT, VERBOSITY
 from scss.cssdefs import _colors, _units, _zero_units
-from scss.functions import _sprite_map, fnct
+import scss.functions
+from scss.functions import _sprite_map
 from scss.parseutil import _inv
 from scss.types import BooleanValue, ColorValue, ListValue, NumberValue, ParserValue, QuotedStringValue, StringValue
 from scss.util import depar, dequote, split_params, to_str
@@ -342,7 +343,7 @@ class Scss(object):
     # configuration:
     construct = 'self'
 
-    def __init__(self, scss_vars=None, scss_opts=None, scss_files=None, super_selector=None):
+    def __init__(self, scss_vars=None, scss_opts=None, scss_files=None, super_selector=None, func_registry=scss.functions.function_registry):
         if super_selector:
             self.super_selector = super_selector + ' '
         else:
@@ -350,6 +351,7 @@ class Scss(object):
         self._scss_vars = scss_vars
         self._scss_opts = scss_opts
         self._scss_files = scss_files
+        self._func_registry = func_registry
         self.reset()
 
     def get_scss_constants(self):
@@ -966,10 +968,10 @@ class Scss(object):
             def setdefault(var, val):
                 _var = '$' + map_name + '-' + var
                 if _var in rule[CONTEXT]:
-                    kwargs[var] = interpolate(rule[CONTEXT][_var], rule)
+                    kwargs[var] = interpolate(rule[CONTEXT][_var], rule, self._func_registry)
                 else:
                     rule[CONTEXT][_var] = val
-                    kwargs[var] = interpolate(val, rule)
+                    kwargs[var] = interpolate(val, rule, self._func_registry)
                 return rule[CONTEXT][_var]
 
             setdefault('sprite-base-class', StringValue('.' + map_name + '-sprite'))
@@ -1552,7 +1554,7 @@ class Scss(object):
 
         better_expr_str = self.do_glob_math(better_expr_str, context, options, rule)
 
-        better_expr_str = eval_expr(better_expr_str, rule, True)
+        better_expr_str = eval_expr(better_expr_str, rule, self._func_registry, True)
 
         if better_expr_str is None:
             better_expr_str = self.apply_vars(_base_str, context, options, rule)
@@ -1563,7 +1565,7 @@ class Scss(object):
         def __calculate_expr(result):
             _group0 = result.group(1)
             _base_str = _group0
-            better_expr_str = eval_expr(_base_str, rule)
+            better_expr_str = eval_expr(_base_str, rule, self._func_registry)
 
             if better_expr_str is None:
                 better_expr_str = self.apply_vars(_base_str, context, options, rule)
@@ -1604,17 +1606,17 @@ class Scss(object):
 
 
 
-def interpolate(v, R):
+def interpolate(v, R, func_registry):
     C, O = R[CONTEXT], R[OPTIONS]
     vi = C.get(v, v)
     if v != vi and isinstance(vi, basestring):
-        _vi = eval_expr(vi, R, True)
+        _vi = eval_expr(vi, R, func_registry, True)
         if _vi is not None:
             vi = _vi
     return vi
 
 
-def call(name, args, R, is_function=True):
+def call(name, args, R, func_registry, is_function=True):
     C, O = R[CONTEXT], R[OPTIONS]
     # Function call:
     _name = name.replace('_', '-')
@@ -1629,7 +1631,7 @@ def call(name, args, R, is_function=True):
         if fn:
             node = fn(R, *_args, **_kwargs)
         else:
-            fn = fnct.get(_fn_a) or fnct[_fn_n]
+            fn = func_registry.lookup(_name, len(_args))
             node = fn(*_args, **_kwargs)
     except KeyError:
         sp = args and args.value.get('_') or ''
@@ -1784,6 +1786,10 @@ class CalculatorScanner(CachedScanner):
 
 
 class Calculator(Parser):
+    def __init__(self, scanner, func_registry):
+        self._func_registry = func_registry
+        super(Calculator, self).__init__(scanner)
+
     def goal(self, R):
         expr_lst = self.expr_lst(R)
         v = expr_lst.first() if len(expr_lst) == 1 else expr_lst
@@ -1904,7 +1910,7 @@ class Calculator(Parser):
             v = atom
             if self._peek(self.u_expr_rsts_) == 'UNITS':
                 UNITS = self._scan('UNITS')
-                v = call(UNITS, ListValue(ParserValue({0: v, 1: UNITS})), R, False)
+                v = call(UNITS, ListValue(ParserValue({0: v, 1: UNITS})), R, self._func_registry, False)
             return v
 
     def atom(self, R):
@@ -1925,7 +1931,7 @@ class Calculator(Parser):
                 expr_lst = self.expr_lst(R)
                 v = expr_lst
             RPAR = self._scan('RPAR')
-            return call(FNCT, v, R)
+            return call(FNCT, v, R, self._func_registry)
         elif _token_ == 'NUM':
             NUM = self._scan('NUM')
             return NumberValue(ParserValue(NUM))
@@ -1943,7 +1949,7 @@ class Calculator(Parser):
             return ColorValue(ParserValue(COLOR))
         else:  # == 'VAR'
             VAR = self._scan('VAR')
-            return interpolate(VAR, R)
+            return interpolate(VAR, R, self._func_registry)
 
     def expr_lst(self, R):
         n = None
@@ -2004,7 +2010,7 @@ class Calculator(Parser):
 ################################################################################
 
 expr_cache = {}
-def eval_expr(expr, rule, raw=False):
+def eval_expr(expr, rule, func_registry, raw=False):
     # print >>sys.stderr, '>>',expr,'<<'
     results = None
 
@@ -2028,7 +2034,7 @@ def eval_expr(expr, rule, raw=False):
             results = expr_cache[expr]
         except KeyError:
             try:
-                P = Calculator(CalculatorScanner())
+                P = Calculator(CalculatorScanner(), func_registry)
                 P.reset(expr)
                 results = P.goal(rule)
             except SyntaxError:
