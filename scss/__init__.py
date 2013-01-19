@@ -554,7 +554,7 @@ class Scss(object):
             start += 1
         return common
 
-    def normalize_selectors(self, _selectors, extra_selectors=None, extra_parents=None):
+    def normalize_selectors(self, _selectors, extra_selectors=None):
         """
         Normalizes or extends selectors in a string.
         An optional extra parameter that can be a list of extra selectors to be
@@ -562,12 +562,6 @@ class Scss(object):
         """
         # Fixe tabs and spaces in selectors
         _selectors = _spaces_re.sub(' ', _selectors)
-
-        if isinstance(extra_selectors, basestring):
-            extra_selectors = extra_selectors.split(',')
-
-        if isinstance(extra_parents, basestring):
-            extra_parents = extra_parents.split('&')
 
         parents = set()
         if ' extends ' in _selectors:
@@ -585,8 +579,7 @@ class Scss(object):
         selectors.discard('')
         if not selectors:
             return ''
-        if extra_parents:
-            parents.update(s.strip() for s in extra_parents if s.strip())
+
         parents.discard('')
         if parents:
             return ','.join(sorted(selectors)) + ' extends ' + '&'.join(sorted(parents))
